@@ -1,8 +1,8 @@
 # SKSE Plugins Updater
 
-A read-only SKSE compatibility scanner and Nexus update-status tool for Mod Organizer 2.
+An SKSE compatibility scanner with reviewed Nexus downloads and interactive MO2 installation.
 
-**Version 0.3.0.** Automatic Nexus refresh, linked mod names, release-specific runtime checks and read-only ZIP candidate inspection are implemented. Automatic download selection and installation remain disabled.
+**Version 0.4.0.** Scan compatibility, refresh Nexus versions, inspect ZIP candidates, and queue exact Nexus files for download followed by normal MO2 installer prompts. File selection is explicitly reviewed; the tool does not choose the newest main file automatically.
 
 ## Compatibility methods
 
@@ -43,7 +43,7 @@ CommonLib family/version generally cannot be reliably recovered from a staticall
 
 Green is not a guarantee of successful game loading, correct signatures/relocations, all transitive dependencies or save compatibility.
 
-Root Builder components are listed as candidates. The scanner does not pretend that a candidate file is a verified deployment. The game root and mod installation are never modified.
+Root Builder components are listed as candidates. The scanner does not pretend that a candidate file is a verified deployment. Scanning does not modify the game root or installed mods. Queued installation is performed by MO2 after the user starts the reviewed queue.
 
 ## Nexus update indicator
 
@@ -66,6 +66,22 @@ Double-click an underlined mod name to open its public Nexus URL from meta.ini. 
 **Inspect downloaded ZIP** reads DLL variants directly inside a user-selected archive, shows SHA-256 and runtime evidence for each, and identifies a standard FOMOD configuration. It never extracts, executes or installs files. Size/count/compression limits bound DLL inspection. ZIP only; 7z/RAR and FOMOD condition evaluation are pending. A green DLL does not prove the archive's origin, dependencies, destination or selected FOMOD branch.
 
 Automated Nexus file-list discovery is deferred: MO2 2.5.2's NexusBridge::nxmFilesAvailable appends pointers to stack-local ModRepositoryFileInfo objects before emitting the list. We avoid that unsafe API. A corrected bridge or a separate authenticated file-list transport must be validated before implementing candidate discovery. Existing mod-description refresh does not use this interface.
+
+## Reviewed download and installation queue
+
+1. Open **Review update queue** after scanning in MO2.
+2. Select an existing mod and use **Open Nexus files** to review its runtime requirements.
+3. Paste an exact file ID or a public Nexus URL containing file_id. **Look up file** retrieves that file's name/version through MO2's authenticated requestFileInfo bridge; no copied API credentials are needed.
+4. Confirm that you reviewed the file for the displayed target runtime and add it. Repeat for other mods. File names and page versions do not establish compatibility; choose applicable FOMOD branches yourself.
+5. Click **Download, then open MO2 installers / Resume**. MO2 downloads all queued files first, then opens one installer at a time. The existing mod name is suggested, but the user retains MO2's rename, merge, replace, cancel and FOMOD choices.
+
+The updater does not extract, move, merge, overwrite or delete installed files itself. It calls organizer.installMod(archive, existing_name) and waits for its synchronous return before scheduling the next item. A canceled/failed installer pauses the queue; Resume retries that item, or remove it to skip. Pause/closing the window stops further handoffs; a currently open installer must be handled in MO2, and existing downloads may continue. No automatic rollback or backup is performed.
+
+Download row indices are not trusted: completion must have a matching MO2 archive .meta sidecar (Skyrim SE, mod ID, file ID). Unrelated downloads are ignored, and identity is checked again before installation. This is an identity check, not a cryptographic archive-content verification. The queue pauses when the reviewed profile, game directory or runtime changes. If you want a different environment, remove queued entries, rescan and reopen the queue.
+
+Nexus access/subscription restrictions still apply. If direct downloading is unavailable, download the chosen file through the Nexus website into MO2 and **Attach completed MO2 download** to its queued entry. The matching .meta sidecar is required. Failed/paused downloads stop the queue when MO2 can identify them; a 30-minute wait limit handles requests that produce no usable callback. Resolve/resume the download in MO2, or attach the finished archive.
+
+The queue is kept in memory for the current tool session. Use **Rescan** after installations to refresh compatibility and Nexus state. 7z/RAR archives can be handed to MO2, although the tool's own binary archive inspector currently handles ZIP only.
 
 ## MO2 and offline operation
 
@@ -92,7 +108,7 @@ Optional arguments:
 
 Reports contain local paths and mod inventory; keep them private. No report is written unless requested. Report schema 2 adds separate environment evidence and update-status fields.
 
-The application does not write to installed mods or change MO2 settings. MO2 itself may write normal logs/cache when its services are used. Automatic refresh integration is covered with mock MO2 contracts and headless Qt tests; real authenticated batch behavior still needs an in-MO2 check.
+Scanning remains read-only. User-started downloads and installations use MO2 services and its configured directories; MO2 also maintains its normal metadata/logs. Queue tests use mocked downloads/installers and synthetic archives; real authenticated downloads and installer/FOMOD behavior still need an in-MO2 check. Development validation does not install mods.
 
 ## Development checks
 
@@ -107,10 +123,10 @@ Only this README and Python source/tests under src are intended for publication.
 
 ## Next milestones
 
-1. Validate the tool and Nexus refresh inside a disposable MO2 instance.
+1. Validate authenticated downloads and cancel/merge/replace/FOMOD flows inside a disposable MO2 instance.
 2. Add hash-bound author/decoder evidence for remaining legacy and V5 uncertainties.
 3. Validate a safe Nexus file-list transport, add 7z/RAR inspection and evaluate FOMOD branches.
-4. Implement backup, verified single-mod installation and restore before batch updates.
+4. Add verified post-install comparison and optional persisted queue recovery. Installation decisions remain with the user in MO2.
 
 ## Primary references
 
@@ -119,6 +135,8 @@ Only this README and Python source/tests under src are intended for publication.
 - [SKSE 2.3.1 loader and V5 fallback](https://github.com/ianpatt/skse64/blob/7ff865f4a27d6dc936ab5fd0533ff2d706c8f857/skse64/PluginManager.cpp)
 - [CommonLibSSE-NG database header](https://github.com/CharmedBaryon/CommonLibSSE-NG/blob/main/include/REL/ID.h)
 - [MO2 Python API](https://www.modorganizer.org/python-plugins-doc/autoapi/mobase/index.html)
+- [MO2 2.5.2 download manager](https://github.com/ModOrganizer2/modorganizer/blob/v2.5.2/src/downloadmanager.cpp)
+- [MO2 2.5.2 installer handoff](https://github.com/ModOrganizer2/modorganizer/blob/v2.5.2/src/organizerproxy.cpp)
 - [MO2 Nexus bridge implementation](https://github.com/ModOrganizer2/modorganizer/blob/master/src/nexusinterface.cpp)
 
 The scanner and UI are independently implemented; reference-repository code and binaries are not distributed here.

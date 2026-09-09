@@ -53,8 +53,10 @@ class ArchiveThread(QThread):
 
 
 class ScannerWindow(QDialog):
-    def __init__(self, snapshot_factory, parent=None, nexus_bridge_factory=None):
+    def __init__(self, snapshot_factory, parent=None, nexus_bridge_factory=None, organizer=None):
         super().__init__(parent)
+        self.organizer = organizer
+        self.queue_window = None
         self.factory = snapshot_factory
         self.nexus = None
         if nexus_bridge_factory is not None:
@@ -72,7 +74,7 @@ class ScannerWindow(QDialog):
         self.refresh_timer.timeout.connect(self.refresh_next)
         self.archive_preview = False
         self.scan_succeeded = False
-        self.setWindowTitle("SKSE Plugins Updater — Read-only preview")
+        self.setWindowTitle("SKSE Plugins Updater")
         self.resize(1320, 780)
         layout = QVBoxLayout(self)
         self.heading = QLabel("SKSE Plugins Updater")
@@ -98,9 +100,10 @@ class ScannerWindow(QDialog):
         self.inspect_button = QPushButton("Inspect downloaded ZIP")
         self.inspect_button.clicked.connect(self.inspect_zip)
         controls.addWidget(self.inspect_button)
-        self.update = QPushButton("Update selected (planned)")
-        self.update.setEnabled(False)
-        self.update.setToolTip("Archive verification, backups and reviewed installation are not implemented yet.")
+        self.update = QPushButton("Review update queue")
+        self.update.setEnabled(organizer is not None)
+        self.update.clicked.connect(self.open_queue)
+        self.update.setToolTip("Choose exact Nexus files, download them, then use normal MO2 installer prompts.")
         controls.addWidget(self.update)
         layout.addLayout(controls)
         self.table = QTableWidget()
@@ -124,8 +127,28 @@ class ScannerWindow(QDialog):
         layout.addWidget(self.summary)
         QTimer.singleShot(0, self.start_scan)
 
+    def open_queue(self):
+        if not self.organizer or not self.report or self.worker:
+            return
+        self.stop_refresh()
+        self.summary.setText("Nexus refresh paused while reviewing the update queue.")
+        if self.queue_window is None:
+            from .queue_ui import QueueWindow
+            try:
+                self.queue_window = QueueWindow(self.organizer, self.report, self)
+            except Exception:
+                self.summary.setText("MO2 download/install services are unavailable.")
+                return
+        self.queue_window.reset_report(self.report)
+        self.queue_window.show()
+        self.queue_window.raise_()
+        self.queue_window.activateWindow()
+
     def start_scan(self):
         if self.worker is not None:
+            return
+        if self.queue_window and (self.queue_window.controller.active or self.queue_window.controller.installing):
+            self.summary.setText("Pause the update queue before rescanning.")
             return
         self.stop_refresh()
         self.archive_preview = False
@@ -329,6 +352,13 @@ class ScannerWindow(QDialog):
             QDesktopServices.openUrl(QUrl(url))
 
     def stop_refresh(self):
+        sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
+        for visual in range(self.table.rowCount()):
+            item = self.table.item(visual, 3)
+            if item and item.text() == "Queued (cached)":
+                item.setText("Not checked (cached)")
+        self.table.setSortingEnabled(sorting)
         self.refresh_timer.stop()
         self.refresh_queue.clear()
         self.refresh_total = 0
@@ -421,6 +451,10 @@ class ScannerWindow(QDialog):
             self.show_details()
 
     def reject(self):
+        if self.queue_window:
+            self.queue_window.controller.pause()
+            if self.queue_window.controller.installing:
+                return
         if self.worker is not None:
             self.worker.requestInterruption()
             self.summary.setText("Canceling scan; close again when it finishes.")
@@ -429,6 +463,11 @@ class ScannerWindow(QDialog):
         super().reject()
 
     def closeEvent(self, event):
+        if self.queue_window:
+            self.queue_window.controller.pause()
+            if self.queue_window.controller.installing:
+                event.ignore()
+                return
         if self.worker is not None:
             self.worker.requestInterruption()
             event.ignore()

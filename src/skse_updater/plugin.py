@@ -26,13 +26,13 @@ class ScannerPlugin(mobase.IPluginTool):
         return "theBigOunce"
 
     def description(self):
-        return "Read-only inventory and compatibility evidence for active SKSE DLLs."
+        return "SKSE compatibility evidence and reviewed Nexus downloads with interactive MO2 installation."
 
     def tooltip(self):
         return self.description()
 
     def version(self):
-        return mobase.VersionInfo(0, 3, 0)
+        return mobase.VersionInfo(0, 4, 0)
 
     def settings(self):
         return []
@@ -45,7 +45,7 @@ class ScannerPlugin(mobase.IPluginTool):
         from .ui import ScannerWindow
         if self.window is None:
             self.window = ScannerWindow(lambda: live_snapshot(self.organizer), self._parentWidget(),
-                                        nexus_bridge_factory=self.organizer.createNexusBridge)
+                                        nexus_bridge_factory=self.organizer.createNexusBridge, organizer=self.organizer)
         elif not self.window.isVisible():
             self.window.start_scan()
         self.window.show()
