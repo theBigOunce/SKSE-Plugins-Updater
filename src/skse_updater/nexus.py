@@ -1,4 +1,4 @@
-"""User-triggered, in-memory Nexus metadata refresh through MO2's existing login."""
+"""Correlated, in-memory Nexus metadata refresh through MO2's existing login."""
 import uuid
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal

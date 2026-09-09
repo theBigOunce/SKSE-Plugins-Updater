@@ -51,3 +51,21 @@ def nexus_game(domain):
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def mod_url(provider):
+    """Allow only public Nexus mod pages; discard query strings and credentials."""
+    from urllib.parse import urlsplit
+    raw = provider.nexus_url.strip()
+    try:
+        url = urlsplit(raw)
+        if (url.scheme in ("http", "https") and url.hostname in ("www.nexusmods.com", "nexusmods.com")
+                and not url.username and not url.password and url.port in (None, 80, 443)
+                and re.fullmatch(r"/[a-zA-Z0-9]+/mods/[1-9][0-9]*/?", url.path)):
+            return "https://www.nexusmods.com" + url.path.rstrip("/")
+    except ValueError:
+        pass
+    domain = nexus_game(provider.game_domain)
+    if domain and provider.mod_id and provider.mod_id > 0:
+        return f"https://www.nexusmods.com/{domain}/mods/{provider.mod_id}"
+    return ""

@@ -1,16 +1,16 @@
-"""Single-page Qt scan window. No installation or network side effects."""
+"""Single-page scan, authenticated Nexus metadata refresh and archive preview."""
 from collections import Counter
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
                              QProgressBar, QPushButton, QTableWidget, QTableWidgetItem,
-                             QVBoxLayout, QHeaderView, QAbstractItemView, QStyle)
+                             QVBoxLayout, QHeaderView, QAbstractItemView, QStyle, QFileDialog)
 
 from .models import version_text
 from .scanner import scan
-from .updates import apply_update, nexus_game
+from .updates import apply_update, nexus_game, mod_url
 
 COLORS = {"supported": "#70c795", "incompatible": "#fa8585", "review": "#e6bd68",
           "shadowed": "#a4aebc", "helper": "#a4aebc"}
@@ -34,6 +34,24 @@ class ScanThread(QThread):
             self.failed.emit(str(exc))
 
 
+class ArchiveThread(QThread):
+    result = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, path, runtime, parent):
+        super().__init__(parent)
+        self.path, self.runtime = path, runtime
+
+    def run(self):
+        from .archives import inspect_archive
+        try:
+            data = inspect_archive(self.path, self.runtime, self.isInterruptionRequested)
+            if not self.isInterruptionRequested():
+                self.result.emit((self.path, self.runtime, data))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class ScannerWindow(QDialog):
     def __init__(self, snapshot_factory, parent=None, nexus_bridge_factory=None):
         super().__init__(parent)
@@ -45,6 +63,15 @@ class ScannerWindow(QDialog):
             self.nexus.completed.connect(self.nexus_completed)
         self.worker = None
         self.report = None
+        self.refresh_queue = []
+        self.refresh_total = 0
+        self.refresh_done = 0
+        self.refresh_errors = 0
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setSingleShot(True)
+        self.refresh_timer.timeout.connect(self.refresh_next)
+        self.archive_preview = False
+        self.scan_succeeded = False
         self.setWindowTitle("SKSE Plugins Updater — Read-only preview")
         self.resize(1320, 780)
         layout = QVBoxLayout(self)
@@ -68,6 +95,9 @@ class ScannerWindow(QDialog):
         self.nexus_button.clicked.connect(self.check_nexus)
         self.nexus_button.setToolTip("Read the selected mod's current page version using MO2's connection.")
         controls.addWidget(self.nexus_button)
+        self.inspect_button = QPushButton("Inspect downloaded ZIP")
+        self.inspect_button.clicked.connect(self.inspect_zip)
+        controls.addWidget(self.inspect_button)
         self.update = QPushButton("Update selected (planned)")
         self.update.setEnabled(False)
         self.update.setToolTip("Archive verification, backups and reviewed installation are not implemented yet.")
@@ -79,6 +109,7 @@ class ScannerWindow(QDialog):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.itemSelectionChanged.connect(self.show_details)
+        self.table.cellDoubleClicked.connect(self.open_mod)
         self.table.verticalHeader().hide()
         layout.addWidget(self.table, 3)
         self.details = QPlainTextEdit()
@@ -96,10 +127,11 @@ class ScannerWindow(QDialog):
     def start_scan(self):
         if self.worker is not None:
             return
+        self.stop_refresh()
+        self.archive_preview = False
+        self.scan_succeeded = False
         self.rescan.setEnabled(False)
         self.nexus_button.setEnabled(False)
-        if self.nexus:
-            self.nexus.cancel()
         self.summary.setText("Capturing profile…")
         try:
             snapshot = self.factory()
@@ -110,7 +142,7 @@ class ScannerWindow(QDialog):
         self.progress.setRange(0, 0)
         self.worker = ScanThread(snapshot, self)
         self.worker.progress.connect(self.on_progress)
-        self.worker.result.connect(self.populate)
+        self.worker.result.connect(self.scan_completed)
         self.worker.failed.connect(self.failed)
         self.worker.finished.connect(self.worker_finished)
         self.worker.start()
@@ -124,6 +156,8 @@ class ScannerWindow(QDialog):
         self.worker = None
         self.rescan.setEnabled(True)
         self.show_details()
+        if self.scan_succeeded:
+            self.refresh_all()
 
     def failed(self, message):
         self.summary.setText("Scan failed: " + message)
@@ -151,6 +185,12 @@ class ScannerWindow(QDialog):
             for column, value in enumerate(texts):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, index)
+                if column == 0 and mod_url(row.provider):
+                    font = item.font()
+                    font.setUnderline(True)
+                    item.setFont(font)
+                    item.setForeground(QColor("#2585d9"))
+                    item.setToolTip("Double-click to open " + mod_url(row.provider))
                 self.table.setItem(index, column, item)
             update_labels = {"available": "Update available", "current": "No newer reported",
                              "ahead": "Installed newer", "unknown": "Unknown"}
@@ -197,12 +237,13 @@ class ScannerWindow(QDialog):
             self.table.setRowHidden(index, needle not in text.casefold())
 
     def show_details(self):
+        self.archive_preview = False
         items = self.table.selectedItems()
         if not items or not self.report:
             self.nexus_button.setEnabled(False)
             return
         row = self.report.rows[items[0].data(Qt.ItemDataRole.UserRole)]
-        self.nexus_button.setEnabled(bool(self.nexus and not self.nexus.pending and self.worker is None
+        self.nexus_button.setEnabled(bool(self.nexus and not self.nexus.pending and not self.refresh_queue and not self.refresh_timer.isActive() and self.worker is None
                                            and row.provider.mod_id and nexus_game(row.provider.game_domain)))
         lines = [f"File: {row.provider.path}", f"SHA-256: {row.binary.sha256}",
                  f"Nexus mod ID: {row.provider.mod_id or 'Unknown'}",
@@ -237,26 +278,154 @@ class ScannerWindow(QDialog):
         except Exception:
             self.summary.setText("Could not open the MO2 Nexus bridge; cached results are unchanged.")
 
-    def nexus_completed(self, result):
-        if result["error"]:
-            self.summary.setText(result["error"] + "; cached results are unchanged.")
+    def inspect_zip(self):
+        if not self.report or not self.report.runtime or self.worker:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Inspect a downloaded candidate", "", "ZIP archives (*.zip)")
+        if not path:
+            return
+        self.archive_preview = True
+        self.worker = ArchiveThread(path, self.report.runtime, self)
+        self.rescan.setEnabled(False)
+        self.inspect_button.setEnabled(False)
+        self.nexus_button.setEnabled(False)
+        self.worker.result.connect(self.archive_completed)
+        self.worker.failed.connect(lambda error: self.details.setPlainText("Archive inspection failed: " + error))
+        self.worker.finished.connect(self.archive_finished)
+        self.details.setPlainText("Inspecting archive without extracting files...")
+        self.worker.start()
+
+    def archive_completed(self, payload):
+        path, runtime, (fomod, candidates) = payload
+        lines = [f"Archive: {path}", f"Target: {version_text(runtime)}",
+                 "FOMOD detected: branch selection still requires review." if fomod else "No standard FOMOD configuration found.",
+                 "Read-only preview; no files extracted or installed. Archive origin and dependencies are unverified."]
+        for name, digest, result in candidates:
+            lines.extend(["", name, f"{result.status}: {result.reason}", f"SHA-256: {digest}", *result.evidence])
+        if not candidates:
+            lines.append("No DLLs found.")
+        self.details.setPlainText("\n".join(lines))
+
+    def archive_finished(self):
+        self.worker.deleteLater()
+        self.worker = None
+        self.rescan.setEnabled(True)
+        self.inspect_button.setEnabled(True)
+        text = self.details.toPlainText()
+        self.show_details()
+        self.details.setPlainText(text)
+        self.archive_preview = True
+
+    def scan_completed(self, report):
+        self.populate(report)
+        self.scan_succeeded = True
+
+    def open_mod(self, row, column):
+        if column != 0 or not self.report:
+            return
+        index = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        url = mod_url(self.report.rows[index].provider)
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+
+    def stop_refresh(self):
+        self.refresh_timer.stop()
+        self.refresh_queue.clear()
+        self.refresh_total = 0
+        if self.nexus:
+            self.nexus.cancel()
+
+    def refresh_all(self):
+        if not self.nexus or not self.report:
+            return
+        seen = set()
+        for row in self.report.rows:
+            provider = row.provider
+            key = (nexus_game(provider.game_domain), provider.mod_id)
+            if provider.managed and all(key) and key not in seen:
+                seen.add(key)
+                self.refresh_queue.append(provider)
+        sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
+        for visual in range(self.table.rowCount()):
+            item = self.table.item(visual, 3)
+            provider = self.report.rows[item.data(Qt.ItemDataRole.UserRole)].provider
+            if (nexus_game(provider.game_domain), provider.mod_id) in seen:
+                item.setText("Queued (cached)")
+        self.table.setSortingEnabled(sorting)
+        self.refresh_total = len(self.refresh_queue)
+        self.refresh_done = self.refresh_errors = 0
+        self.refresh_next()
+
+    def refresh_next(self):
+        if not self.refresh_queue or not self.nexus:
             self.show_details()
             return
+        provider = self.refresh_queue.pop(0)
+        self.summary.setText(f"Checking Nexus {self.refresh_done + 1}/{self.refresh_total} through MO2...")
+        self.nexus_button.setEnabled(False)
+        try:
+            if not self.nexus.request(provider):
+                raise RuntimeError("Request unavailable")
+        except Exception:
+            self.nexus_completed({"game": nexus_game(provider.game_domain),
+                                  "mod_id": provider.mod_id, "error": "MO2 Nexus bridge unavailable",
+                                  "version": None, "checked_at": ""})
+
+    def nexus_completed(self, result):
         if self.report:
             for row in self.report.rows:
                 if (row.provider.mod_id == result["mod_id"]
                         and nexus_game(row.provider.game_domain) == result["game"]):
-                    apply_update(row.provider, result["version"], result["checked_at"], "Live Nexus check")
-            self.populate(self.report)
-        self.summary.setText("Nexus version refreshed in memory. Update availability does not establish file compatibility.")
+                    if not result["error"]:
+                        apply_update(row.provider, result["version"], result["checked_at"], "Live Nexus check")
+            # Update cells by stable report index, preserving selection and scroll.
+            sorting = self.table.isSortingEnabled()
+            self.table.setSortingEnabled(False)
+            for visual in range(self.table.rowCount()):
+                item = self.table.item(visual, 3)
+                provider = self.report.rows[item.data(Qt.ItemDataRole.UserRole)].provider
+                if provider.mod_id != result["mod_id"] or nexus_game(provider.game_domain) != result["game"]:
+                    continue
+                item.setText("Check failed (cached)" if result["error"] else
+                             {"available": "Update available", "current": "No newer reported",
+                              "ahead": "Installed newer", "unknown": "Unknown"}[provider.update_status])
+                item.setToolTip(result["error"] or
+                                f"{provider.update_source}; {provider.update_checked_at}\nReported: {provider.newest_release}\n{provider.update_reason}")
+                from PyQt6.QtGui import QIcon
+                item.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp)
+                             if provider.update_status == "available" else QIcon())
+            self.table.setSortingEnabled(sorting)
+            self.filter_rows()
+        if self.refresh_total:
+            self.refresh_done += 1
+            self.refresh_errors = self.refresh_errors + 1 if result["error"] else 0
+            if self.refresh_errors >= 3:
+                self.refresh_queue.clear()
+                self.table.setSortingEnabled(False)
+                for visual in range(self.table.rowCount()):
+                    item = self.table.item(visual, 3)
+                    if item.text() == "Queued (cached)":
+                        item.setText("Not checked (cached)")
+                self.table.setSortingEnabled(sorting)
+                self.summary.setText("Nexus refresh stopped after three consecutive failures. Check MO2's connection; unchecked rows retain labeled cache.")
+            elif self.refresh_queue:
+                self.refresh_timer.start(1000)
+            else:
+                self.summary.setText(f"Nexus refresh finished: {self.refresh_done}/{self.refresh_total} mods checked. File compatibility must still be verified.")
+            if not self.refresh_queue:
+                self.refresh_total = 0
+        else:
+            self.summary.setText(result["error"] or "Nexus version refreshed. File compatibility must still be verified.")
+        if not self.archive_preview:
+            self.show_details()
 
     def reject(self):
         if self.worker is not None:
             self.worker.requestInterruption()
             self.summary.setText("Canceling scan; close again when it finishes.")
             return
-        if self.nexus:
-            self.nexus.cancel()
+        self.stop_refresh()
         super().reject()
 
     def closeEvent(self, event):
@@ -264,6 +433,5 @@ class ScannerWindow(QDialog):
             self.worker.requestInterruption()
             event.ignore()
         else:
-            if self.nexus:
-                self.nexus.cancel()
+            self.stop_refresh()
             super().closeEvent(event)

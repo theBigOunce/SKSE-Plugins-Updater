@@ -48,6 +48,7 @@ class Provider:
     update_status: str = "unknown"
     update_reason: str = "No Nexus version information"
     update_source: str = "MO2 cache"
+    nexus_url: str = ""
 
 
 @dataclass

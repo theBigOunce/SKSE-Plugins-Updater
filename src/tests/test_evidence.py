@@ -43,7 +43,7 @@ class LoaderRulesTests(unittest.TestCase):
         self.assertEqual(assess(binary, (1, 5, 97, 0)).status, "review")
 
     def test_new_encoding_not_assumed(self):
-        self.assertEqual(assess(self.binary(1, 3), (1, 7, 99, 0)).status, "review")
+        self.assertEqual(assess(self.binary(1, 3), (1, 7, 99, 0)).status, "supported")
 
     def test_all_local_prerequisites(self):
         binary = self.binary()
@@ -152,3 +152,24 @@ class UpdateTests(unittest.TestCase):
     def test_domain_whitelist(self):
         self.assertEqual(nexus_game("SkyrimSE"), "skyrimspecialedition")
         self.assertIsNone(nexus_game("Fallout4"))
+
+
+class NewRuntimeTests(unittest.TestCase):
+    binary = LoaderRulesTests.binary
+    def test_old_address_library_rejected(self):
+        binary = self.binary()
+        binary.timestamp = 1748217599
+        self.assertEqual(assess(binary, (1, 7, 99, 0)).status, "incompatible")
+        binary.timestamp = 1748217600
+        self.assertEqual(assess(binary, (1, 7, 99, 0)).status, "review")
+
+    def test_explicit_runtime_escape(self):
+        binary = self.binary()
+        binary.timestamp = 1700000000
+        binary.declaration.runtimes = [(1, 7, 99, 0)]
+        self.assertEqual(assess(binary, (1, 7, 99, 0)).status, "supported")
+
+    def test_signature_only_not_subject_to_v5(self):
+        binary = self.binary(2, 1)
+        binary.timestamp = 1700000000
+        self.assertEqual(assess(binary, (1, 7, 99, 0)).status, "supported")

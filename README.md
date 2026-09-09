@@ -2,7 +2,7 @@
 
 A read-only SKSE compatibility scanner and Nexus update-status tool for Mod Organizer 2.
 
-**Version 0.2.0.** Runtime checks and Nexus version indicators are implemented. Automatic download selection, archive verification and installation remain disabled.
+**Version 0.3.0.** Automatic Nexus refresh, linked mod names, release-specific runtime checks and read-only ZIP candidate inspection are implemented. Automatic download selection and installation remain disabled.
 
 ## Compatibility methods
 
@@ -19,13 +19,15 @@ For **1.6.1170**, the evaluator follows SKSE 2.2.6's loader checks:
 - Address Library and signature-scanning independence flags.
 - Post-1.6.629 structure layouts or declared cross-layout/no-structure usage.
 - Minimum SKSE requirements, evaluated against a verified local root runtime when available.
-- Unknown flags or missing declarations produce Review.
+- Unknown flags produce Review; missing required version metadata is incompatible.
 
 The matching Address Library is inspected independently: encoding, embedded runtime, executable name, 64-bit pointer size, address count and basic payload bounds. Formats 1 and 2 are understood. This does not validate every relocation entry or prove that a plugin's own offsets/signatures are correct.
 
 For **1.5.97**, SKSE 2.0.20 requires a Query entry point. Its absence is incompatible; its presence alone remains Review because determining the function's answer would require more evidence. AE metadata does not prove the legacy Query path.
 
-For **1.7.99**, V5 capability is displayed but does not automatically turn green. SKSE 2.3.0 and 2.3.1 have different loader behavior; later rules include a build-timestamp fallback for older declarations. Timestamp heuristics alone are insufficient proof of the binary's database decoder. Full release-specific V5 validation remains pending. Unknown future runtimes are never inferred as supported.
+For **1.7.99**, the matrix models **SKSE 2.3.1** specifically. An Address Library DLL without the V5 capability flag, whose COFF timestamp is in [520128000, 1748217600) (before May 26, 2025), loses runtime independence under that loader. It is incompatible unless it explicitly lists 1.7.99. A V5 declaration, explicit runtime listing, or signature-only independence can pass the applicable metadata checks. Structure checks still apply when runtime independence is used.
+
+Without V5 or an exact runtime declaration, timestamps outside that interval remain Review: reproducible builds can use non-date timestamps, and a recent timestamp does not prove decoder support. These checks reproduce loader decisions, not CommonLib version detection. SKSE 2.3.0 behaves differently; unknown future runtimes remain Review.
 
 CommonLib family/version generally cannot be reliably recovered from a statically linked DLL. Author evidence tied to an exact release/hash and a matching load observation can strengthen uncertain cases; filename labels and old unbound logs cannot. No plugin code is executed during scanning.
 
@@ -47,15 +49,23 @@ Root Builder components are listed as candidates. The scanner does not pretend t
 
 An upward arrow marks a newer mod-page release, independently of DLL compatibility.
 
-- On scan, read MO2's cached newest version and available check date.
+- On launch, reopening the tool, and **Rescan**, scan the active profile and refresh every identified Nexus mod through MO2.
 - Cached results are labeled; unknown or unorderable versions stay Unknown.
 - Select a row and click **Check selected on Nexus** to request the current page version through MO2's existing authenticated bridge.
 - Refresh results stay in memory. No API keys are requested, copied or stored.
-- Requests are limited to one selected mod at a time, time out after 30 seconds, and ignore stale callbacks.
-- Failure leaves the cached information intact.
+- Automatic refresh deduplicates mod IDs, requests one mod at a time with a one-second interval, times out after 30 seconds, and stops after three consecutive failures. Rescan/close discard queued work and stale callbacks.
+- Failure leaves cached information intact with an explicit failed/not-checked label. Rows update without resetting selection.
 - Multiple DLL rows belonging to the same Nexus mod are updated together.
 
 A newer page release may be for a different runtime or optional file. The indicator does **not** identify an installable update, select the newest main file, or authorize a download.
+
+Double-click an underlined mod name to open its public Nexus URL from meta.ini. If that field is absent/invalid, a known Skyrim SE domain and mod ID provide the link. Non-Nexus URLs and credentials/query parameters are not opened.
+
+## Download candidate inspection
+
+**Inspect downloaded ZIP** reads DLL variants directly inside a user-selected archive, shows SHA-256 and runtime evidence for each, and identifies a standard FOMOD configuration. It never extracts, executes or installs files. Size/count/compression limits bound DLL inspection. ZIP only; 7z/RAR and FOMOD condition evaluation are pending. A green DLL does not prove the archive's origin, dependencies, destination or selected FOMOD branch.
+
+Automated Nexus file-list discovery is deferred: MO2 2.5.2's NexusBridge::nxmFilesAvailable appends pointers to stack-local ModRepositoryFileInfo objects before emitting the list. We avoid that unsafe API. A corrected bridge or a separate authenticated file-list transport must be validated before implementing candidate discovery. Existing mod-description refresh does not use this interface.
 
 ## MO2 and offline operation
 
@@ -82,7 +92,7 @@ Optional arguments:
 
 Reports contain local paths and mod inventory; keep them private. No report is written unless requested. Report schema 2 adds separate environment evidence and update-status fields.
 
-The application does not write to installed mods or change MO2 settings. MO2 itself may write normal logs/cache when its services are used. Live registration and authenticated Nexus refresh still need validation inside a disposable MO2 process; current integration coverage uses mock contracts and headless Qt tests.
+The application does not write to installed mods or change MO2 settings. MO2 itself may write normal logs/cache when its services are used. Automatic refresh integration is covered with mock MO2 contracts and headless Qt tests; real authenticated batch behavior still needs an in-MO2 check.
 
 ## Development checks
 
@@ -98,8 +108,8 @@ Only this README and Python source/tests under src are intended for publication.
 ## Next milestones
 
 1. Validate the tool and Nexus refresh inside a disposable MO2 instance.
-2. Add exact-release evidence for legacy Query-only and V5-dependent plugins.
-3. Discover and inspect compatible Nexus file candidates and FOMOD branches.
+2. Add hash-bound author/decoder evidence for remaining legacy and V5 uncertainties.
+3. Validate a safe Nexus file-list transport, add 7z/RAR inspection and evaluate FOMOD branches.
 4. Implement backup, verified single-mod installation and restore before batch updates.
 
 ## Primary references

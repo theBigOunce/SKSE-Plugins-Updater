@@ -3,7 +3,7 @@ import configparser
 from pathlib import Path
 
 from .models import Provider, Snapshot
-from .updates import apply_update
+from .updates import apply_update, mod_url
 
 
 def ini(path: Path) -> configparser.ConfigParser:
@@ -32,9 +32,9 @@ def read_provenance(root: Path):
         raw = section.get("modid", "")
         mod_id = int(raw) if raw.isdecimal() and int(raw) > 0 else None
         return (section.get("version", ""), mod_id, section.get("gameName", ""),
-                section.get("newestVersion", ""), section.get("lastNexusQuery", ""))
+                section.get("newestVersion", ""), section.get("lastNexusQuery", ""), section.get("url", ""))
     except (OSError, UnicodeError, configparser.Error):
-        return "", None, "", "", ""
+        return "", None, "", "", "", ""
 
 
 def collect(profile: str, game: Path, sources: list[tuple[str, Path, bool]],
@@ -46,7 +46,7 @@ def collect(profile: str, game: Path, sources: list[tuple[str, Path, bool]],
         if not root.is_dir():
             result.warnings.append(f"Missing provider directory: {name}")
             continue
-        release, mod_id, domain, newest, checked = read_provenance(root) if managed else ("", None, "", "", "")
+        release, mod_id, domain, newest, checked, url = read_provenance(root) if managed else ("", None, "", "", "", "")
         plugins = root / "SKSE" / "Plugins"
         try:
             files = sorted(plugins.iterdir()) if plugins.is_dir() else []
@@ -56,6 +56,8 @@ def collect(profile: str, game: Path, sources: list[tuple[str, Path, bool]],
                 if path.suffix.lower() == ".dll":
                     relative = "SKSE/Plugins/" + path.name
                     provider = Provider(name, str(path), relative, managed, True, release, mod_id, domain)
+                    provider.nexus_url = url
+                    provider.nexus_url = mod_url(provider)
                     apply_update(provider, newest, checked)
                     key = relative.casefold()
                     if key in winners:

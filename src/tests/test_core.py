@@ -93,7 +93,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_ng_is_not_universal(self):
         binary = inspect_bytes(fixture(flags=1))
-        self.assertEqual(assess(binary, (1, 7, 99, 0), database_present=True).status, "review")
+        self.assertEqual(assess(binary, (1, 7, 99, 0), database_present=True).status, "incompatible")
 
     def test_database_missing(self):
         binary = inspect_bytes(fixture(flags=5))
