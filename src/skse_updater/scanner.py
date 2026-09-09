@@ -2,7 +2,8 @@
 from pathlib import Path
 
 from . import __version__
-from .compatibility import KNOWN_TARGETS, assess
+from .compatibility import KNOWN_TARGETS, assess, environment_assessment
+from .address_library import inspect_database
 from .models import Assessment, Report, Row, version_text
 from .pe_scan import inspect_file
 from .runtime import file_version
@@ -20,6 +21,18 @@ def scan(snapshot, progress=None, canceled=None):
             components[path.name] = version_text(file_version(path))
     for path in snapshot.root_candidates:
         components["Root candidate: " + path] = version_text(file_version(Path(path)))
+    # Root Builder files are candidates, not a verified deployment. Do not silently
+    # substitute their version for the SKSE DLL actually present in the game root.
+    skse_version = None
+    if runtime and not snapshot.root_candidates:
+        runtime_dll = game / ("skse64_" + "_".join(map(str, runtime[:3])) + ".dll")
+        resource = file_version(runtime_dll)
+        loader = file_version(game / "skse64_loader.exe")
+        if resource and resource == loader and resource[0] == 0:
+            skse_version = (*resource[1:], 0)
+    suffix = "-".join(map(str, runtime)) + ".bin" if runtime else ""
+    database = inspect_database(snapshot.databases.get(("versionlib-" if runtime and runtime >= (1, 6, 0, 0) else "version-") + suffix), runtime)
+    snapshot.warnings.append(database.reason)
     rows = []
     for index, provider in enumerate(snapshot.providers):
         if canceled and canceled():
@@ -27,13 +40,15 @@ def scan(snapshot, progress=None, canceled=None):
         binary = inspect_file(Path(provider.path))
         statuses = {}
         for target in targets:
-            suffix = "-".join(map(str, target)) + ".bin"
-            present = any((prefix + suffix).casefold() in snapshot.databases for prefix in ("version-", "versionlib-"))
-            status = assess(binary, target, effective=provider.effective, database_present=present)
-            if status.status == "supported" and snapshot.mode == "offline":
-                status = Assessment("review", "Exact runtime declared; effective MO2 mapping is not verified offline")
+            status = assess(binary, target, effective=provider.effective)
             statuses[version_text(target)] = status
-        rows.append(Row(provider, binary, statuses))
+        current = statuses.get(version_text(runtime), Assessment("review", "Game runtime is unknown"))
+        environment = environment_assessment(binary, current, database, skse_version,
+                                             effective=provider.effective, storefront=snapshot.storefront)
+        if snapshot.mode == "offline" and environment.status == "supported":
+            environment = Assessment("review", "Local prerequisites pass; live MO2 mappings are unverified",
+                                     environment.evidence)
+        rows.append(Row(provider, binary, statuses, environment))
         if progress:
             progress(index + 1, len(snapshot.providers))
-    return Report(1, __version__, snapshot, runtime, components, rows)
+    return Report(2, __version__, snapshot, runtime, components, rows)

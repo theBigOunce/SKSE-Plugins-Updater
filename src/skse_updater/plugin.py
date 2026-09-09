@@ -32,7 +32,7 @@ class ScannerPlugin(mobase.IPluginTool):
         return self.description()
 
     def version(self):
-        return mobase.VersionInfo(0, 1, 0)
+        return mobase.VersionInfo(0, 2, 0)
 
     def settings(self):
         return []
@@ -44,7 +44,8 @@ class ScannerPlugin(mobase.IPluginTool):
         from .mo2_adapter import live_snapshot
         from .ui import ScannerWindow
         if self.window is None:
-            self.window = ScannerWindow(lambda: live_snapshot(self.organizer), self._parentWidget())
+            self.window = ScannerWindow(lambda: live_snapshot(self.organizer), self._parentWidget(),
+                                        nexus_bridge_factory=self.organizer.createNexusBridge)
         self.window.show()
         self.window.raise_()
         self.window.activateWindow()

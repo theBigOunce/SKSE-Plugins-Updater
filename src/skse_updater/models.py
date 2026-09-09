@@ -30,6 +30,7 @@ class Binary:
     exports: list[str] = field(default_factory=list)
     declaration: Declaration | None = None
     error: str = ""
+    timestamp: int = 0
 
 
 @dataclass
@@ -42,6 +43,11 @@ class Provider:
     release: str = ""
     mod_id: int | None = None
     game_domain: str = ""
+    newest_release: str = ""
+    update_checked_at: str = ""
+    update_status: str = "unknown"
+    update_reason: str = "No Nexus version information"
+    update_source: str = "MO2 cache"
 
 
 @dataclass
@@ -54,12 +60,14 @@ class Snapshot:
     root_candidates: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     capabilities: dict[str, bool] = field(default_factory=dict)
+    storefront: str = "unknown"
 
 
 @dataclass
 class Assessment:
     status: str
     reason: str
+    evidence: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -67,6 +75,7 @@ class Row:
     provider: Provider
     binary: Binary
     assessments: dict[str, Assessment]
+    environment: Assessment = field(default_factory=lambda: Assessment("review", "Environment not assessed"))
 
 
 @dataclass
@@ -77,3 +86,13 @@ class Report:
     runtime: Version | None
     skse_components: dict[str, str]
     rows: list[Row]
+
+
+@dataclass
+class Database:
+    status: str
+    reason: str
+    path: str = ""
+    format: int | None = None
+    runtime: Version | None = None
+    entries: int = 0

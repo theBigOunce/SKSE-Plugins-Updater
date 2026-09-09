@@ -3,6 +3,7 @@ from pathlib import Path
 
 from .inventory import collect
 from .models import Provider
+from .updates import apply_update
 
 
 def live_snapshot(organizer):
@@ -20,6 +21,12 @@ def live_snapshot(organizer):
     if overwrite.is_dir():
         sources.append(("Overwrite", overwrite, False))
     snapshot = collect(organizer.profileName(), game, sources, "live MO2")
+    for provider in snapshot.providers:
+        mod = mods.getMod(provider.mod) if provider.managed else None
+        if mod and callable(getattr(mod, "newestVersion", None)):
+            newest = mod.newestVersion()
+            if newest.isValid():
+                apply_update(provider, newest.canonicalString(), source="MO2 in-memory cache")
     relative_paths = {p.relative.casefold(): p.relative for p in snapshot.providers}
     # Include file-mapper providers that are absent from ordinary mod directories.
     for info in organizer.findFileInfos("SKSE/Plugins", lambda f: str(f.filePath).lower().endswith(".dll")):

@@ -3,6 +3,7 @@ import configparser
 from pathlib import Path
 
 from .models import Provider, Snapshot
+from .updates import apply_update
 
 
 def ini(path: Path) -> configparser.ConfigParser:
@@ -24,26 +25,28 @@ def child(parent: Path, name: str) -> Path:
     return parent / name
 
 
-def read_provenance(root: Path) -> tuple[str, int | None, str]:
+def read_provenance(root: Path):
     try:
         metadata = ini(root / "meta.ini")
         section = metadata["General"] if metadata.has_section("General") else {}
         raw = section.get("modid", "")
         mod_id = int(raw) if raw.isdecimal() and int(raw) > 0 else None
-        return section.get("version", ""), mod_id, section.get("gameName", "")
+        return (section.get("version", ""), mod_id, section.get("gameName", ""),
+                section.get("newestVersion", ""), section.get("lastNexusQuery", ""))
     except (OSError, UnicodeError, configparser.Error):
-        return "", None, ""
+        return "", None, "", "", ""
 
 
 def collect(profile: str, game: Path, sources: list[tuple[str, Path, bool]],
             mode: str) -> Snapshot:
     result = Snapshot(profile, str(game), mode)
+    result.storefront = "steam" if (game / "steam_api64.dll").is_file() else "unknown"
     winners = {}
     for name, root, managed in sources:  # low priority first, overwrite last
         if not root.is_dir():
             result.warnings.append(f"Missing provider directory: {name}")
             continue
-        release, mod_id, domain = read_provenance(root) if managed else ("", None, "")
+        release, mod_id, domain, newest, checked = read_provenance(root) if managed else ("", None, "", "", "")
         plugins = root / "SKSE" / "Plugins"
         try:
             files = sorted(plugins.iterdir()) if plugins.is_dir() else []
@@ -53,6 +56,7 @@ def collect(profile: str, game: Path, sources: list[tuple[str, Path, bool]],
                 if path.suffix.lower() == ".dll":
                     relative = "SKSE/Plugins/" + path.name
                     provider = Provider(name, str(path), relative, managed, True, release, mod_id, domain)
+                    apply_update(provider, newest, checked)
                     key = relative.casefold()
                     if key in winners:
                         result.providers[winners[key]].effective = False

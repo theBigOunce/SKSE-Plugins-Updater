@@ -25,6 +25,7 @@ class PE:
         if self.take(header, 4) != b"PE\0\0":
             raise PEError("Invalid PE signature")
         self.machine, count = self.unpack("HH", header + 4)
+        self.timestamp = self.u32(header + 8)
         size = self.unpack("H", header + 20)[0]
         optional = header + 24
         magic = self.unpack("H", optional)[0]
@@ -122,6 +123,7 @@ def inspect_bytes(data: bytes) -> Binary:
     try:
         pe = PE(data)
         result.machine = pe.machine
+        result.timestamp = pe.timestamp
         exports = pe.exports()
         result.exports = sorted(exports)
         if "SKSEPlugin_Version" in exports:

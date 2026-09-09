@@ -31,7 +31,9 @@ def main():
             output.write_text(json.dumps(asdict(report), indent=2), encoding="utf-8")
         current = version_text(report.runtime)
         statuses = Counter(row.assessments[current].status for row in report.rows if current in row.assessments)
-        print(f"Skyrim {current}; {len(report.rows)} DLL providers; {dict(statuses)}")
+        print(f"Skyrim {current}; {len(report.rows)} DLL providers; runtime metadata: {dict(statuses)}")
+        local = Counter(row.environment.status for row in report.rows)
+        print(f"Local prerequisite checks: {dict(local)}")
         print(f"Address Library files: {len(snapshot.databases)}; root component candidates: {len(snapshot.root_candidates)}")
         for warning in snapshot.warnings:
             print("Note:", warning)

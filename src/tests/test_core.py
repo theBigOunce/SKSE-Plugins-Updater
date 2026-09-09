@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from skse_updater.compatibility import assess
+from skse_updater.compatibility import assess, environment_assessment
 from skse_updater.inventory import collect, offline_snapshot, qt_text
-from skse_updater.models import Binary, Declaration, Provider, Snapshot
+from skse_updater.models import Binary, Declaration, Provider, Snapshot, Database
 from skse_updater.pe_scan import inspect_bytes
 from skse_updater.scanner import scan
 
@@ -96,7 +96,11 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(assess(binary, (1, 7, 99, 0), database_present=True).status, "review")
 
     def test_database_missing(self):
-        self.assertEqual(assess(inspect_bytes(fixture(flags=1)), (1, 6, 1170, 0)).status, "incompatible")
+        binary = inspect_bytes(fixture(flags=5))
+        status = assess(binary, (1, 6, 1170, 0))
+        self.assertEqual(status.status, "supported")
+        self.assertEqual(environment_assessment(binary, status, Database("missing", "Missing"),
+                                               (2, 2, 6, 0)).status, "incompatible")
 
     def test_unknown_flags(self):
         self.assertEqual(assess(inspect_bytes(fixture(flags=128)), (1, 6, 1170, 0)).status, "review")
@@ -105,7 +109,12 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(assess(inspect_bytes(fixture(machine=0x14c)), (1, 6, 1170, 0)).status, "incompatible")
 
     def test_unknown_origin(self):
-        self.assertEqual(assess(inspect_bytes(fixture()), (1, 6, 1170, 0), effective=None).status, "review")
+        binary = inspect_bytes(fixture())
+        status = assess(binary, (1, 6, 1170, 0), effective=None)
+        self.assertEqual(status.status, "supported")
+        local = environment_assessment(binary, status, Database("missing", ""), (2, 2, 6, 0),
+                                       effective=None, storefront="steam")
+        self.assertEqual(local.status, "review")
 
     def test_shadowed(self):
         self.assertEqual(assess(inspect_bytes(fixture()), (1, 6, 1170, 0), effective=False).status, "shadowed")
@@ -142,7 +151,8 @@ class InventoryTests(unittest.TestCase):
         snapshot = collect("Example", self.root, [("mod", root, True)], "offline")
         with patch("skse_updater.scanner.file_version", return_value=(1, 6, 1170, 0)):
             report = scan(snapshot)
-        self.assertEqual(report.rows[0].assessments["1.6.1170.0"].status, "review")
+        self.assertEqual(report.rows[0].assessments["1.6.1170.0"].status, "supported")
+        self.assertEqual(report.rows[0].environment.status, "review")
 
     def test_offline_profile_order(self):
         instance = self.root / "instance"

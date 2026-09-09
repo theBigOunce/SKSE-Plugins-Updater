@@ -1,11 +1,24 @@
-"""Conservative initial compatibility policy; declarations are not crash guarantees."""
-from .models import Assessment, Binary, Version
+"""Release-specific SKSE metadata rules, separated from current environment checks.
+
+Rules derived from SKSE v2.2.6 PluginManager::CheckPluginCompatibility:
+9398d04592a7eb9d754f2997701116df1022f1b4.
+The 1.5 loader invokes Query code, so metadata alone cannot prove that branch.
+The 1.7.99 ecosystem requires additional encoding evidence; not extrapolated.
+"""
+from .models import Assessment, Binary, Version, unpack_version, version_text
 
 KNOWN_TARGETS = ((1, 5, 97, 0), (1, 6, 1170, 0), (1, 7, 99, 0))
+ADDRESS_LIBRARY = 1
+SIGNATURES = 2
+POST_629 = 4
+NO_STRUCTS = 1
+V5 = 2
 
 
 def assess(binary: Binary, target: Version, *, effective: bool | None = True,
-           database_present: bool = False) -> Assessment:
+           database_present=None) -> Assessment:
+    # effective and database_present are retained for callers of the 0.1 API.
+    # Dependency availability belongs to the environment, not the runtime matrix.
     if effective is False:
         return Assessment("shadowed", "Another provider wins this DLL path")
     if binary.error:
@@ -14,28 +27,64 @@ def assess(binary: Binary, target: Version, *, effective: bool | None = True,
         return Assessment("incompatible", "Not an AMD64 DLL")
     if not any(name.startswith("SKSEPlugin_") for name in binary.exports):
         return Assessment("helper", "No SKSE entry point; may be an auxiliary DLL")
-    if effective is None:
-        return Assessment("review", "Effective file origin could not be resolved")
     declaration = binary.declaration
     if not declaration:
-        return Assessment("review", "Legacy/query-only DLL; runtime support cannot be inferred from exports")
+        return Assessment("review", "Legacy/query-only DLL; use author evidence or a hash-bound load observation")
     if declaration.flags & ~7 or declaration.flags_ex & ~3:
         return Assessment("review", "Unknown compatibility flags")
     if target not in KNOWN_TARGETS:
-        return Assessment("review", "Runtime/storefront is outside the validated policy targets")
+        return Assessment("review", "Runtime is outside the release-specific policy targets")
     if not {"SKSEPlugin_Load", "SKSEPlugin_Preload"}.intersection(binary.exports):
         return Assessment("review", "Metadata present but no SKSE load entry point")
-    independent = bool(declaration.flags & 3)
-    if not independent and target not in declaration.runtimes:
-        return Assessment("incompatible", "Explicit runtime declaration excludes this version")
-    if declaration.flags & 1 and not database_present:
-        return Assessment("incompatible", "Required runtime Address Library file is absent")
-    if target >= (1, 7, 99, 0):
-        return Assessment("review", "1.7.99 loader/V5 rules need release-matched validation")
+    if target == (1, 5, 97, 0):
+        if not {"SKSEPlugin_Query", "SKSEPlugin_Load"}.issubset(binary.exports):
+            return Assessment("incompatible", "SKSE 2.0.20 requires both legacy Query and Load entry points")
+        return Assessment("review", "1.5.97 invokes Query code; AE metadata cannot prove its result")
+    if target == (1, 7, 99, 0):
+        detail = "V5 capability declared" if declaration.flags_ex & V5 else "No explicit V5 capability"
+        return Assessment("review", detail + "; release-specific loader/encoding validation still required")
+    independent = bool(declaration.flags & (ADDRESS_LIBRARY | SIGNATURES))
+    evidence = ["SKSE v2.2.6 loader metadata rules for Skyrim 1.6.1170"]
     if independent:
-        return Assessment("review", "Declares runtime independence; database encoding/ABI still need validation")
+        if not (declaration.flags & POST_629 or declaration.flags_ex & NO_STRUCTS):
+            return Assessment("incompatible", "Uses pre-1.6.629 structures; SKSE rejects it on 1.6.1170", evidence)
+        evidence.append("Post-1.6.629 structures declared" if declaration.flags & POST_629
+                        else "Declares no structure use / cross-layout compatibility")
+        if declaration.flags & ADDRESS_LIBRARY:
+            evidence.append("Uses Address Library; the matching database is required")
+        if declaration.flags & SIGNATURES:
+            evidence.append("Declares signature scanning rather than hardcoded addresses")
+    elif target not in declaration.runtimes:
+        return Assessment("incompatible", "Explicit runtime declaration excludes this version", evidence)
+    else:
+        evidence.append("Exact runtime appears in the explicit compatibility list")
     if declaration.minimum_skse:
-        return Assessment("review", "Runtime listed; minimum SKSE requirement still needs verification")
-    if declaration.flags or declaration.flags_ex:
-        return Assessment("review", "Runtime listed with additional ABI flags requiring verification")
-    return Assessment("supported", "Exact runtime listed in DLL declaration; does not verify other dependencies")
+        evidence.append("Requires SKSE >= " + version_text(unpack_version(declaration.minimum_skse)))
+    return Assessment("supported", "Passes this runtime's metadata/structure checks", evidence)
+
+
+def environment_assessment(binary, runtime_assessment, database, skse_version,
+                           *, effective=True, storefront="unknown"):
+    evidence = list(runtime_assessment.evidence)
+    if runtime_assessment.status != "supported":
+        return runtime_assessment
+    if binary.declaration.flags & ADDRESS_LIBRARY:
+        if database.status in ("missing", "invalid"):
+            return Assessment("incompatible", database.reason, evidence)
+        if database.status != "valid":
+            return Assessment("review", database.reason, evidence)
+        evidence.append(database.reason)
+    minimum = binary.declaration.minimum_skse
+    if minimum:
+        if skse_version is None:
+            return Assessment("review", "Minimum SKSE cannot be checked against a verified root runtime", evidence)
+        if skse_version < unpack_version(minimum):
+            return Assessment("incompatible", "Installed SKSE is below the DLL's minimum requirement", evidence)
+    if skse_version is None:
+        return Assessment("review", "DLL runtime supported; effective SKSE root installation is unverified", evidence)
+    if storefront != "steam":
+        return Assessment("review", "Runtime metadata passes; storefront is not verified as Steam", evidence)
+    if effective is None:
+        return Assessment("review", "Runtime metadata passes; effective file origin is unknown", evidence)
+    evidence.append("Detected SKSE version " + version_text(skse_version))
+    return Assessment("supported", "Runtime declaration and checked local prerequisites pass", evidence)

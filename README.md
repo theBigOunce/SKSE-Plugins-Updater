@@ -1,62 +1,88 @@
 # SKSE Plugins Updater
 
-A read-only SKSE DLL inventory and compatibility tool for Mod Organizer 2.
+A read-only SKSE compatibility scanner and Nexus update-status tool for Mod Organizer 2.
 
-**Status: scanner preview (0.1.0).** Downloads, archive selection, backups and mod installation are not implemented. The update button is intentionally disabled.
+**Version 0.2.0.** Runtime checks and Nexus version indicators are implemented. Automatic download selection, archive verification and installation remain disabled.
 
-## Features
+## Compatibility methods
 
-- MO2 tool with a single Qt window, runtime matrix, filtering, progress and evidence details.
-- Obtains the game directory and active profile from MO2; no hardcoded installation paths.
-- Enumerates active mod DLLs, helper DLLs, unmanaged Data and Overwrite.
-- Uses MO2's virtual path resolver to identify winning files when running inside MO2.
-- Offline command-line inventory for standard MO2 layouts; explicitly marks its mapping as provisional.
-- Reads game and SKSE version resources without executing scanned binaries.
-- Reads AMD64 PE exports and schema-1 SKSE declarations directly from bytes.
-- Reports Address Library file presence and root-managed SKSE candidates.
-- Keeps mod release strings, DLL declaration versions and runtime compatibility separate.
-- Optional private JSON report from the command line.
+The scanner reads each DLL's AMD64 PE exports and SKSEPlugin_Version structure without loading or executing it. Game and SKSE file-version resources are read separately. Results distinguish two questions:
 
-## Compatibility meanings
+- **Runtime matrix:** Does this DLL pass the known runtime-specific metadata checks?
+- **Local prerequisites (row details):** Are the required Address Library and effective SKSE installation established in this environment?
+
+An offline scan no longer turns a supported DLL amber just because MO2's live file mapping is unavailable. Its mapping limitation remains visible in the header/details and local-prerequisite result.
+
+For **1.6.1170**, the evaluator follows SKSE 2.2.6's loader checks:
+
+- Explicit runtime lists when runtime independence is not declared.
+- Address Library and signature-scanning independence flags.
+- Post-1.6.629 structure layouts or declared cross-layout/no-structure usage.
+- Minimum SKSE requirements, evaluated against a verified local root runtime when available.
+- Unknown flags or missing declarations produce Review.
+
+The matching Address Library is inspected independently: encoding, embedded runtime, executable name, 64-bit pointer size, address count and basic payload bounds. Formats 1 and 2 are understood. This does not validate every relocation entry or prove that a plugin's own offsets/signatures are correct.
+
+For **1.5.97**, SKSE 2.0.20 requires a Query entry point. Its absence is incompatible; its presence alone remains Review because determining the function's answer would require more evidence. AE metadata does not prove the legacy Query path.
+
+For **1.7.99**, V5 capability is displayed but does not automatically turn green. SKSE 2.3.0 and 2.3.1 have different loader behavior; later rules include a build-timestamp fallback for older declarations. Timestamp heuristics alone are insufficient proof of the binary's database decoder. Full release-specific V5 validation remains pending. Unknown future runtimes are never inferred as supported.
+
+CommonLib family/version generally cannot be reliably recovered from a statically linked DLL. Author evidence tied to an exact release/hash and a matching load observation can strengthen uncertain cases; filename labels and old unbound logs cannot. No plugin code is executed during scanning.
+
+## Status meanings
 
 | Status | Meaning |
 | --- | --- |
-| Supported* | Exact runtime appears in the DLL declaration and initial metadata checks pass. Other dependencies, successful loading and save compatibility are not established. |
-| Incompatible | A known architecture/runtime mismatch or missing declared runtime database was found. |
-| Review | Evidence is incomplete, legacy, unsupported or requires more validation. |
-| Shadowed | Another provider wins this DLL path. |
-| Helper | No SKSE entry point; the DLL may be an auxiliary library. |
+| Supported* | Runtime-specific static metadata/structure checks pass. Inspect local prerequisites separately. |
+| Incompatible | A known architecture, entry-point or runtime declaration mismatch was found. Local checks can also identify invalid/missing dependencies. |
+| Review | Evidence is absent, unsupported or insufficient for this particular check. |
+| Shadowed | Another provider wins the DLL path. |
+| Helper | No SKSE entry point; possibly an auxiliary library. |
 
-Current policy targets are 1.5.97, 1.6.1170 and 1.7.99. Unknown runtimes remain Review. Runtime-independence flags do not automatically produce green results. Full Address Library encoding/ABI validation and 1.7.99 V5 rules are pending. CommonLib family/version is not inferred from a filename.
+Green is not a guarantee of successful game loading, correct signatures/relocations, all transitive dependencies or save compatibility.
 
-Root Builder components are listed as candidates. Their effective mapping and SKSE/game agreement are not yet verified. Offline results cannot account for live file-mapper plugins, unsaved changes or all unusual MO2 layouts.
+Root Builder components are listed as candidates. The scanner does not pretend that a candidate file is a verified deployment. The game root and mod installation are never modified.
 
-## Requirements and installation
+## Nexus update indicator
 
-Target: MO2 2.5.x with its Python 3.12 and Qt 6 plugin support. Core scanning uses only Python's standard library; Windows version-resource detection requires Windows.
+An upward arrow marks a newer mod-page release, independently of DLL compatibility.
 
-When ready to test in an MO2 installation, place the src/skse_updater folder under MO2's plugins directory and restart MO2. Launch **SKSE Plugins Updater** from the tools menu. Do not install the folder as a normal Data mod.
+- On scan, read MO2's cached newest version and available check date.
+- Cached results are labeled; unknown or unorderable versions stay Unknown.
+- Select a row and click **Check selected on Nexus** to request the current page version through MO2's existing authenticated bridge.
+- Refresh results stay in memory. No API keys are requested, copied or stored.
+- Requests are limited to one selected mod at a time, time out after 30 seconds, and ignore stale callbacks.
+- Failure leaves the cached information intact.
+- Multiple DLL rows belonging to the same Nexus mod are updated together.
 
-The plugin does not save settings, contact Nexus, download files or modify mods. MO2 itself can write its normal logs/settings when run. Live integration has not yet been tested inside an MO2 process; use a disposable instance for that validation.
+A newer page release may be for a different runtime or optional file. The indicator does **not** identify an installable update, select the newest main file, or authorize a download.
 
-## Offline scan
+## MO2 and offline operation
 
-From the repository root in PowerShell:
+Target: MO2 2.5.x, embedded Python 3.12 and Qt 6. The core scanner uses only the standard library; version-resource detection requires Windows.
+
+When ready to test in a disposable MO2 instance, put the src/skse_updater folder under MO2's plugins directory and restart MO2. Open **SKSE Plugins Updater** from its tools menu. The plugin gets the game directory and selected profile directly from MO2.
+
+Live MO2 resolves winning virtual paths; offline mode uses saved standard profile priority. Offline mode cannot see unsaved changes or every file-mapper plugin. No hardcoded personal paths are present.
+
+From the repository root:
 
 ~~~powershell
 $env:PYTHONPATH = Join-Path (Get-Location) 'src'
 python -B -m skse_updater --mo2 'C:\ModOrganizer'
 ~~~
 
-The selected profile and game path are read from ModOrganizer.ini. Optional arguments:
+Optional arguments:
 
 ~~~text
---game PATH       Override the game directory
---profile NAME    Override the selected profile
---output PATH     Write a private JSON report (contains local paths/mod inventory)
+--game PATH       Override game directory
+--profile NAME    Override selected profile
+--output PATH     Private JSON report destination outside scanned directories
 ~~~
 
-Report output must be outside the scanned installation and mod directories. No report is written unless requested. Keep reports and credentials out of Git.
+Reports contain local paths and mod inventory; keep them private. No report is written unless requested. Report schema 2 adds separate environment evidence and update-status fields.
+
+The application does not write to installed mods or change MO2 settings. MO2 itself may write normal logs/cache when its services are used. Live registration and authenticated Nexus refresh still need validation inside a disposable MO2 process; current integration coverage uses mock contracts and headless Qt tests.
 
 ## Development checks
 
@@ -65,24 +91,24 @@ $env:PYTHONPATH = Join-Path (Get-Location) 'src'
 python -B -m unittest discover -s src/tests -v
 ~~~
 
-Tests use generated PE bytes and temporary synthetic mod folders. No actual mod binaries are included. UI tests, when Qt is available, can run with QT_QPA_PLATFORM=offscreen and a matching Qt offscreen platform plugin.
+Tests use synthetic PE files, database headers and mod folders. Qt tests require a matching offscreen platform and QT_QPA_PLATFORM=offscreen. No actual mod binaries are distributed.
 
-Only README.md and Python source/tests under src are intended for publication. The development checkout uses a local Git exclude allowlist; local reference repositories, environment reports and planning notes are not tracked.
+Only this README and Python source/tests under src are intended for publication. Reference repos, private reports, credentials and development notes remain outside Git through the development checkout's local exclude allowlist.
 
 ## Next milestones
 
-1. Validate live MO2 origin resolution and profile changes in a disposable instance.
-2. Validate runtime-specific SKSE and Address Library rules with matching fixtures.
-3. Use MO2's Nexus bridge for candidate metadata through its existing login.
-4. Inspect candidate archives and present exact file choices for review.
-5. Add backups, verified single-mod installation and restoration before batch updates.
+1. Validate the tool and Nexus refresh inside a disposable MO2 instance.
+2. Add exact-release evidence for legacy Query-only and V5-dependent plugins.
+3. Discover and inspect compatible Nexus file candidates and FOMOD branches.
+4. Implement backup, verified single-mod installation and restore before batch updates.
 
-No separate Nexus credentials are required by this preview. MO2 exposes authenticated metadata/download interfaces; their live behavior will be validated before enabling updates.
+## Primary references
 
-## Technical references
-
+- [SKSE 2.2.6 loader rules](https://github.com/ianpatt/skse64/blob/9398d04592a7eb9d754f2997701116df1022f1b4/skse64/PluginManager.cpp)
+- [SKSE 2.0.20 legacy loading](https://github.com/ianpatt/skse64/blob/v2.0.20/skse64/PluginManager.cpp)
+- [SKSE 2.3.1 loader and V5 fallback](https://github.com/ianpatt/skse64/blob/7ff865f4a27d6dc936ab5fd0533ff2d706c8f857/skse64/PluginManager.cpp)
+- [CommonLibSSE-NG database header](https://github.com/CharmedBaryon/CommonLibSSE-NG/blob/main/include/REL/ID.h)
 - [MO2 Python API](https://www.modorganizer.org/python-plugins-doc/autoapi/mobase/index.html)
-- [SKSE metadata declarations](https://github.com/ianpatt/skse64/blob/master/skse64/PluginAPI.h)
-- [SKSE loader compatibility checks](https://github.com/ianpatt/skse64/blob/master/skse64/PluginManager.cpp)
+- [MO2 Nexus bridge implementation](https://github.com/ModOrganizer2/modorganizer/blob/master/src/nexusinterface.cpp)
 
-The scanner and UI are independently implemented. No code or binaries from the local reference repositories are distributed here.
+The scanner and UI are independently implemented; reference-repository code and binaries are not distributed here.
